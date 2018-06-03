@@ -1,7 +1,7 @@
+#!/usr/bin/python
 import cv2
 import numpy
 import itertools
-import pyquaternion
 
 import rospy
 import cv_bridge
@@ -12,9 +12,9 @@ from sensor_msgs.msg import *
 from geometry_msgs.msg import *
 
 
+# Plane class holds plane parameters
 class Plane:
 	def __init__(self, coeffs):
-		self.coeffs = numpy.float32(coeffs[:4])
 		self.scale = coeffs[4]
 		self.centroid = numpy.float32(coeffs[5:])
 
@@ -42,6 +42,7 @@ class Plane:
 			cv2.line(canvas, pt1, pt2, (0, 0, 255), 2)
 
 
+# A class for displaying a cube
 class Cube:
 	def __init__(self, scale):
 		self.scale = scale
@@ -50,6 +51,7 @@ class Cube:
 		self.indices = [(i1, i2) for (i1, x1), (i2, x2) in itertools.combinations(ivertices, 2) if sum(abs(x1 - x2)) == 1]
 		self.vertices = (self.vertices.astype(numpy.float32) - (0.5, 0.5, 0.5)) * self.scale
 
+	# draws the cube on the place
 	def draw(self, canvas, camera_matrix, distortion, rvec, tvec, plane):
 		vertices = []
 		for vertex in self.vertices:
@@ -58,22 +60,23 @@ class Cube:
 		vertices = numpy.float32(vertices)
 
 		projected, jacob = cv2.projectPoints(vertices, rvec, tvec, camera_matrix, distortion)
-
 		for i1, i2 in self.indices:
 			pt1 = tuple(projected[i1].flatten().astype(numpy.int32))
 			pt2 = tuple(projected[i2].flatten().astype(numpy.int32))
 			cv2.line(canvas, pt1, pt2, (0, 255, 0), 2)
 
 
+# ROS node for simple AR with plane detection
 class SimpleARNode:
 	def __init__(self):
-		self.canvas = numpy.zeros((480, 640, 4), dtype=numpy.uint8)
-		self.image_pub = rospy.Publisher('/ar_image', Image, queue_size=5)
+		self.frame = numpy.zeros((480, 640, 4), dtype=numpy.uint8)
 
-		self.cv_bridge = cv_bridge.CvBridge()
 		self.cubes = [Cube(0.5)]
 		self.plane = None
 
+		self.cv_bridge = cv_bridge.CvBridge()
+		self.image_pub = rospy.Publisher('/ar_image', Image, queue_size=5)
+		self.plane_sub = rospy.Subscriber('/plane_coeffs', Float32MultiArray, self.plane_callback)
 		subs = [
 			message_filters.Subscriber('/usb_cam_node/camera_info', CameraInfo),
 			message_filters.Subscriber('/usb_cam_node/image_raw', Image),
@@ -82,20 +85,22 @@ class SimpleARNode:
 		self.sync = message_filters.ApproximateTimeSynchronizer(subs, 10, 0.1)
 		self.sync.registerCallback(self.callback)
 
-		self.plane_sub = rospy.Subscriber('/plane_coeffs', Float32MultiArray, self.plane_callback)
-
+	# callback for plane parameters
 	def plane_callback(self, plane_msg):
 		self.plane = Plane(plane_msg.data)
 
+	# callback for images and camera poses
 	def callback(self, camera_info_msg, image_msg, camera_pose_msg):
+		# wait ufor plane parameters
 		if self.plane is None:
 			return
 
+		# camera parameters and image
 		camera_matrix = numpy.float32(camera_info_msg.K).reshape(3, 3)
 		distortion = numpy.float32(camera_info_msg.D).flatten()
-
 		frame = self.cv_bridge.imgmsg_to_cv2(image_msg, 'bgr8')
 
+		# camera pose
 		cam2world = tf_conversions.toMatrix(tf_conversions.fromMsg(camera_pose_msg.pose))
 		world2cam = numpy.linalg.inv(cam2world)
 
@@ -103,14 +108,14 @@ class SimpleARNode:
 		rvec, jacob = cv2.Rodrigues(world2cam[:3, :3])
 
 		self.plane.draw(frame, camera_matrix, distortion, rvec, tvec)
-
 		for cube in self.cubes:
 			cube.draw(frame, camera_matrix, distortion, rvec, tvec, self.plane)
 
-		self.canvas = frame
+		self.frame = frame
 
+	# shows AR image!!
 	def show(self):
-		cv2.imshow('canvas', self.canvas)
+		cv2.imshow('frame', self.frame)
 		cv2.waitKey(10)
 
 

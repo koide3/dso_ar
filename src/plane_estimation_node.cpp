@@ -11,6 +11,13 @@
 #include <sensor_msgs/PointCloud2.h>
 #include <std_msgs/Float32MultiArray.h>
 
+
+/** 
+ * @brief Palane parameters estimation node
+ * This node accumulates input point clouds and applies RANSAC to it.
+ * Parameters to be estimates are [plane.x, plane.y, plane.z, plane.w, scale, centroid.x, centroid.y, centroid.z]
+ * This implementation has a lot of ad hoc parameters. It may not be able to apply it to other datasets.
+ */
 class PlaneEstimationNode {
 public:
   PlaneEstimationNode()
@@ -41,6 +48,9 @@ public:
     std::cout << "done" << std::endl;
   }
 
+  /**
+   * @brief estimates the plane parameters by applying RANSAC
+   */
   void estimate_plane(pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud) {
     auto filtered = normal_filter(cloud);
     filtered = outlier_removal(filtered);
@@ -72,16 +82,15 @@ public:
       inliers_pub.publish(inliers);
     }
 
-    std::cout << "inliers : " << inliers->size() << std::endl;
-
     if(plane_coeffs_pub.getNumSubscribers()) {
       Eigen::Vector4f centroid;
       pcl::compute3DCentroid(*inliers, centroid);
 
+      // estimates the plane scale based on the distance between each point and the centroid
       std::vector<float> dists(inliers->size());
       std::transform(inliers->begin(), inliers->end(), dists.begin(), [&](const pcl::PointXYZ& pt) {return (pt.getVector4fMap() - centroid).head<3>().norm();});
       std::sort(dists.begin(), dists.end());
-      double scale = dists[dists.size() * 0.8];
+      double scale = dists[dists.size() * 0.8];		// eliminate outliers
 
       std_msgs::Float32MultiArrayPtr coeffs_msg(new std_msgs::Float32MultiArray());
       coeffs_msg->data.resize(coefficients->values.size());
@@ -98,6 +107,9 @@ public:
     }
   }
 
+  /**
+   * @brief filters out points with non-vertical normals (here, vertical is (0, 0, -1))
+   */
   pcl::PointCloud<pcl::PointXYZ>::Ptr normal_filter(const pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud) {
     pcl::NormalEstimation<pcl::PointXYZ, pcl::Normal> ne;
     ne.setInputCloud (cloud);
@@ -131,6 +143,9 @@ public:
     return filtered;
   }
 
+  /**
+   * @brief filters out outliers with statistical outlier removal
+   */
   pcl::PointCloud<pcl::PointXYZ>::Ptr outlier_removal(const pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud) {
     pcl::StatisticalOutlierRemoval<pcl::PointXYZ> sor;
     sor.setInputCloud(cloud);
